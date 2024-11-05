@@ -371,7 +371,6 @@ def main():
 
     samples2 = 10000
     X_test = X_test[:samples2]
-    dsad
     Y_test = Y_test[:samples2]
 
     X_train = X_train.astype(np.uint32)
