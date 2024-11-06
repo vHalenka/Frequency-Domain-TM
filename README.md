@@ -11,8 +11,12 @@ Best SVM Wavelet: 11.35%
 
 
 SVM Buenos Aires
-LL1: 11.35%
-T2: 11.35%
-LL1T2: 11.35%
-LL1 PCA 98: 11.35%
+LL1: 11.35%,
+
+T2: 11.35%,
+
+LL1T2: 11.35%,
+
+LL1 PCA 98: 11.35%,
+
 T2 PCA 98: 11.35%
