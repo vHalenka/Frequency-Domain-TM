@@ -10,7 +10,7 @@ Best SVM DCT: 10.95%
 Best SVM Wavelet: 11.35%
 
 
-SVM Buenos Aires
+## SVM Buenos Aires
 LL1: 11.35%,
 
 T2: 11.35%,
