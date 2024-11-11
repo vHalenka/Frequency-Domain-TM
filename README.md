@@ -9,6 +9,11 @@ Best SVM DCT: 10.95%
 
 Best SVM Wavelet: 11.35%
 
+## SVM DMKothari
+
+Best SVM: 96.5%
+(random sample split)
+
 
 ## SVM Buenos Aires
 LL1: 11.35%,
