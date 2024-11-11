@@ -1,11 +1,12 @@
 import subprocess
+import optuna
 import numpy as np
+import re
 
 def run_experiment_with_params(ensembles, epochs, clauses, T, s, patch_dim, max_included_literals, resolution, binarized, batch_size, block_size, quant_multiple, quant_matrix, dct_step, wavelet_type):
 
-    # Build the command
     command = [
-        'python3', 'DCT_experiment.py', 
+        'python3', 'TM-Experiment.py', 
         '--ensembles', str(ensembles),
         '--epochs', str(epochs),
         '--clauses', str(clauses),
@@ -23,53 +24,78 @@ def run_experiment_with_params(ensembles, epochs, clauses, T, s, patch_dim, max_
         '--dct_step', str(dct_step),
         '--output_dir', f"results_{resolution}_{binarized}_{quant_multiple}"
     ]
-    
-    # Use subprocess.Popen to run the command and print the output in real-time
+    print("Running command:", " ".join(command))
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     
-    # Print stdout and stderr in real time
+    best_accuracy = 0
+    accuracy_pattern = re.compile(r"Test Accuracy (\d+\.\d+)%")
     for stdout_line in process.stdout:
-        print(stdout_line, end='')  # Print the output line by line
-    
-    # Wait for the process to finish and get the return code
-    process.stdout.close()
-    returncode = process.wait()
+        print(stdout_line, end='')
+
+        # Use regex to extract the accuracy value
+        match = accuracy_pattern.search(stdout_line)
+        if match:
+            best_accuracy = float(match.group(1))
+
     
     # Capture any remaining stderr (if needed)
     stderr_output = process.stderr.read()
     if stderr_output:
-        print(stderr_output)
+        print("STDERR Output:", stderr_output)
+    process.stdout.close()
+    returncode = process.wait()
+    
+    if returncode != 0:
+        raise RuntimeError("Experiment failed to run")
 
-    return returncode
+    return best_accuracy
+def objective(trial):
+    # Define the parameter search space
+    wavelet_type = trial.suggest_categorical("wavelet_type", ["haar", "morlet", "db1"])
+    dct_step = trial.suggest_int("dct_step", 5, 10)
+    block_size = trial.suggest_categorical("block_size", [4, 8, 16])
+    quant_multiple = trial.suggest_float("quant_multiple", 0.5, 2.0, step=0.5)
+    patch_dim_size = trial.suggest_int("patch_dim_size", 1, 16, step=2)
+
+    # Set patch_dim to be square
+    patch_dim = (patch_dim_size, patch_dim_size)
+
+    # Fixed parameters (your proposed good starting values)
+    ensembles = 1
+    epochs = 50
+    clauses = 2000
+    resolution = 30
+    T = 5000
+    s = 4.0
+    max_included_literals = 32
+    binarized = True
+    batch_size = 500
+    quant_matrix = "img_quant_matrix"
+
+    # Run the experiment and get the accuracy
+    accuracy = run_experiment_with_params(
+        ensembles, epochs, clauses, T, s, patch_dim, max_included_literals,
+        resolution, binarized, batch_size, block_size, quant_multiple, quant_matrix,
+        dct_step, wavelet_type
+    )
+
+    return accuracy
 
 
 def main():
-    # Define the parameters to test
-    ensembles = 1
-    epochs = 50
-    clauses = 16000
-    T = 10000
-    s = 4.0
-    patch_dims = [(10,10), (5,5)]
-    max_included_literals = 32
-    resolution = 20
-    binarized = True
-    batch_size = 10000
-    block_size = 8
-    quant_multiple = 1.0
-    quant_matrix = "img_quant_matrix"
-    wavelet_type = ["haar","morlet"]
-    dct_steps = [5, 3]
+    # Create an Optuna study to maximize accuracy
+    study = optuna.create_study(direction="maximize")
 
-    # Iterate over the parameter combinations
-    for patch_dim in patch_dims:
-        for dct_step in dct_steps:
-            print(f"Running experiment with resolution={resolution}, binarized={binarized}, quant_matrix={quant_matrix}, block_size={block_size}, dct_steps={dct_step}, patch_dims={patch_dim}")
-            run_experiment_with_params(
-                ensembles, epochs, clauses, T, s, patch_dim, max_included_literals, 
-                resolution, binarized, batch_size, block_size, quant_multiple, quant_matrix, dct_step, wavelet_type
-            )
+    # Run the optimization for a specified number of trials
+    study.optimize(objective, n_trials=50)
 
+    # Print the best found parameters
+    print("Best Parameters:")
+    print(study.best_params)
+    print(f"Best Accuracy: {study.best_value:.2f}%")
+
+    # Optionally, save the study results
+    study.trials_dataframe().to_csv("optuna_study_results.csv")
 
 if __name__ == "__main__":
     main()

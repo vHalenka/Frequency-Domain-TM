@@ -8,16 +8,34 @@ import time
 import logging
 import argparse
 import wandb
+import inspect
 from skimage.util import view_as_windows
 from scipy.signal import morlet
-
-
-
-
-from scipy.stats import boxcox  # Import Box-Cox function
+import pywt
 
 # Set logging level for matplotlib to WARNING or ERROR
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
+
+
+def wandb_logging(func):
+    def wrapper(*args, **kwargs):
+        wandb.init(project="Wavelet_methods")
+
+        func_signature = inspect.signature(func)
+        func_args = func_signature.bind(*args, **kwargs)
+        func_args.apply_defaults()
+
+        config = func_args.arguments
+        wandb.config.update(config)
+
+        try:
+            result = func(*args, **kwargs)
+        finally:
+            wandb.finish()
+
+        return result
+
+    return wrapper
 
 
 img_quant_matrix = np.array([
@@ -87,9 +105,7 @@ def extract_dct_from_image(img, block_size=8, step=8, tile=False, crop=False):
         return dct_image[:h, :w]
     else:
         return dct_image
-import numpy as np
-import pywt
-from skimage.util import view_as_windows
+
 
 def extract_wavelet_from_image(img, block_size=8, step=8, wavelet='haar', level=1, tile=False, crop=False):
     h, w = img.shape    
@@ -117,25 +133,6 @@ def extract_wavelet_from_image(img, block_size=8, step=8, wavelet='haar', level=
         wavelet_image = wavelet_blocks
     
     return wavelet_image[:h, :w] if crop else wavelet_image
-
-
-
-
-def apply_boxcox_to_dataset(X_data):
-    # Flatten the dataset while keeping the samples dimension
-    X_flattened = X_data.reshape(X_data.shape[0], -1)
-    
-    # Apply Box-Cox transformation to the entire dataset globally
-    # Ensure all values are positive for Box-Cox
-    X_flattened = X_flattened + np.abs(np.min(X_flattened)) + 1e-10
-    
-    # Apply Box-Cox to each feature (column-wise)
-    X_boxcox = np.zeros_like(X_flattened)
-    for i in range(X_flattened.shape[1]):
-        X_boxcox[:, i], _ = boxcox(X_flattened[:, i])
-    
-    # Reshape back to the original dimensions (e.g., 28x28 for images)
-    return X_boxcox.reshape(X_data.shape)
 
 def thermometer_encoding(X_data, resolution, clip_percentile=99):
     X_min = np.min(X_data)
@@ -241,31 +238,14 @@ def extract_dct_from_array(image_array, block_size):
     
     return dct_array[:h, :w]
 
+
+
 # Main function to run the experiment
-def run_experiment(X_train, Y_train, X_test, Y_test, ensembles, epochs, clauses, T, s, patch_dim, max_included_literals, resolution, output_base_dir, batch_size, binarized, block_size, quant_multiple, quant_matrix=img_quant_matrix, dct_step=8, wavelet_type="haar"):
+@wandb_logging
+def run_experiment(X_train, Y_train, X_test, Y_test, ensembles, epochs, clauses, T, s, patch_dim, max_included_literals,
+                   resolution, output_base_dir, batch_size, binarized, block_size, quant_multiple, quant_matrix=img_quant_matrix,
+                   dct_step=8, wavelet_type="haar"):
     num_samples = X_train.shape[0]
-    
-    # Initialize a new WandB run and log the config parameters
-    wandb.init(project="Wavelet_methods")
-    
-    # Log all the passed arguments (config) into WandB
-    wandb.config.update({
-        "ensembles": ensembles,
-        "epochs": epochs,
-        "clauses": clauses,
-        "T": T,
-        "s": s,
-        "patch_dim": patch_dim,
-        "max_included_literals": max_included_literals,
-        "resolution": resolution,
-        "binarized": binarized,
-        "batch_size": batch_size,
-        "block_size": block_size,
-        "quant_multiple": quant_multiple,
-        "quant_matrix": quant_matrix,
-        "output_base_dir": output_base_dir,
-        "dct_step": dct_step
-    })
  
     output_dir = os.path.join(output_base_dir, f"bin_{binarized}, resolution_{resolution}")
     if not os.path.exists(output_dir):
@@ -280,7 +260,7 @@ def run_experiment(X_train, Y_train, X_test, Y_test, ensembles, epochs, clauses,
             weighted_clauses=True
         )
         print("Preprocessing test data...", X_test.shape)
-        X_test = preprocess_data(X_test, block_size=block_size, resolution=resolution, binarised=binarized, patch_dim=patch_dim, quant_multiple=quant_multiple, quant_matrix=quant_matrix, dct_step=dct_step, wavelet_type=wavelet_type)
+        X_test = preprocess_data(X_test, block_size=block_size, resolution=resolution, binarised=binarized, patch_dim=patch_dim, quant_multiple=quant_multiple, quant_matrix=quant_matrix, dct_step=dct_step, wavelet_type=wavelet_type, limit_seconds=300)
         
         # Parameters for early stopping
         patience = 10  # Number of epochs with no improvement after which training will be stopped
@@ -310,13 +290,18 @@ def run_experiment(X_train, Y_train, X_test, Y_test, ensembles, epochs, clauses,
 
             result_test = 100 * (tm.predict(X_test_subset) == Y_test_subset).mean()
             epoch_time = time.time() - start_time
+
+            # Check if epoch time exceeds the limit
+            if epoch_time > limit_seconds:
+                print(f"Stopping early at epoch {epoch + 1} due to epoch time exceeding {limit_seconds} seconds.")
+                break
+                
             # Check for improvement in accuracy
             if result_test - best_accuracy > min_delta:
                 best_accuracy = result_test
                 epochs_no_improve = 0
             else:
                 epochs_no_improve += 1
-            
             # Early stopping
             if epochs_no_improve >= patience:
                 print(f"Stopping early at epoch {epoch+1}. No improvement for {patience} consecutive epochs.")
@@ -331,7 +316,6 @@ def run_experiment(X_train, Y_train, X_test, Y_test, ensembles, epochs, clauses,
             })
 
             print(f"Epoch {epoch + 1}, Resolution {resolution}: Test Accuracy {result_test:.2f}%, Training Time: {epoch_time:.2f} seconds")
-    wandb.finish()
     return result_test
 
 
@@ -346,7 +330,7 @@ def main():
     parser.add_argument('--s', type=float, default=4.0, help='Specificity s')
     parser.add_argument("--patch_dim", nargs="+", default=(10, 10), type=int, help="Patch dimension as space-separated integers (e.g., '1 1')")
     parser.add_argument('--max_included_literals', type=int, default=32, help='Max included literals')
-    parser.add_argument('--resolution', type=int, default=20, help='Resolution for thermometer encoding')
+    parser.add_argument('--resolution', type=int, default=30, help='Resolution for thermometer encoding')
     parser.add_argument('--binarized', type=bool, default=True, help='Use binarization')
     parser.add_argument('--batch_size', type=int, default=1000, help='Batch size')
     parser.add_argument('--block_size', type=int, default=8, help='Block size for DCT')
